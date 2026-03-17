@@ -1,0 +1,201 @@
+#define _GNU_SOURCE
+#include <unistd.h>
+#include <sys/mount.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <errno.h>
+#include <stdio.h>
+
+/**
+ * FusionOS init (PID 1)
+ * - Mounts proc/sys/dev/tmp
+ * - Sets environment
+ * - Spawns shell in loop
+ * - Handles reaping of orphans
+ */
+
+/* Signal handler for SIGCHLD - reap children */
+static volatile sig_atomic_t child_exited = 0;
+
+static void sigchld_handler(int sig) {
+    (void) sig;
+    child_exited = 1;
+}
+
+/**
+ * Mount a filesystem with error reporting
+ */
+static int mount_fs(const char *source, const char *target, const char *type,
+                    unsigned long flags, const void *data) {
+    if (mount(source, target, type, flags, data) == -1) {
+        perror("mount");
+        fprintf(stderr, "mount: %s failed\n", target);
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Initialize the filesystem mounts and environment
+ */
+static int init_system(void) {
+    printf("FusionOS init (PID 1) starting...\n");
+    
+    /* Ensure /proc is mounted */
+    struct stat sb;
+    if (stat("/proc/version", &sb) != 0) {
+        printf("Mounting /proc...\n");
+        mount_fs("proc", "/proc", "proc", 0, NULL);
+    }
+    
+    /* Ensure /sys is mounted */
+    if (stat("/sys/class", &sb) != 0) {
+        printf("Mounting /sys...\n");
+        mount_fs("sysfs", "/sys", "sysfs", 0, NULL);
+    }
+    
+    /* Ensure /dev is mounted */
+    if (stat("/dev/null", &sb) != 0) {
+        printf("Mounting /dev...\n");
+        mount_fs("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
+    }
+    
+    /* Ensure /tmp is mounted */
+    if (stat("/tmp", &sb) != 0) {
+        mkdir("/tmp", 0777);
+    }
+    mount_fs("tmpfs", "/tmp", "tmpfs", 0, "mode=1777");
+    
+    printf("System mounts initialized\n");
+    
+    /* Set basic environment */
+    setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
+    setenv("HOME", "/root", 1);
+    setenv("TERM", "linux", 1);
+    setenv("PS1", "fsh> ", 1);
+    
+    return 0;
+}
+
+/**
+ * Spawn a shell process
+ */
+static pid_t spawn_shell(void) {
+    pid_t pid = fork();
+    
+    if (pid == -1) {
+        perror("fork");
+        return -1;
+    }
+    
+    if (pid == 0) {
+        /* Child process */
+        setsid();
+        
+        /* Open stdin/stdout/stderr */
+        int fd_in = open("/dev/console", O_RDONLY);
+        int fd_out = open("/dev/console", O_WRONLY);
+        int fd_err = open("/dev/console", O_WRONLY);
+        
+        if (fd_in == -1) fd_in = open("/dev/null", O_RDONLY);
+        if (fd_out == -1) fd_out = open("/dev/null", O_WRONLY);
+        if (fd_err == -1) fd_err = open("/dev/null", O_WRONLY);
+        
+        if (fd_in != STDIN_FILENO) dup2(fd_in, STDIN_FILENO);
+        if (fd_out != STDOUT_FILENO) dup2(fd_out, STDOUT_FILENO);
+        if (fd_err != STDERR_FILENO) dup2(fd_err, STDERR_FILENO);
+        
+        close(fd_in);
+        close(fd_out);
+        close(fd_err);
+        
+        /* Execute fsh (FusionOS shell) */
+        execl("/bin/fsh", "fsh", NULL);
+        
+        /* Fallback to sh if fsh not available */
+        printf("fsh not found, trying busybox sh\n");
+        execl("/bin/sh", "sh", NULL);
+        
+        /* Ultimate fallback */
+        fprintf(stderr, "Failed to exec shell\n");
+        _exit(127);
+    }
+    
+    /* Parent returns child PID */
+    return pid;
+}
+
+/**
+ * Reap all dead children
+ */
+static void reap_children(void) {
+    int status;
+    pid_t pid;
+    
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (WIFEXITED(status)) {
+            printf("[%d] exited with status %d\n", pid, WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            printf("[%d] killed by signal %d\n", pid, WTERMSIG(status));
+        }
+    }
+}
+
+/**
+ * Main init loop
+ */
+int main(void) {
+    if (init_system() != 0) {
+        fprintf(stderr, "System initialization failed\n");
+        return 1;
+    }
+    
+    /* Setup signal handler for child reaping */
+    struct sigaction sa;
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_NOCLDSTOP;
+    sigaction(SIGCHLD, &sa, NULL);
+    
+    /* Ignore SIGTERM and SIGINT - don't let shells kill init */
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    
+    printf("FusionOS init ready. Spawning shell...\n");
+    printf("=== FusionOS Console ===\n");
+    
+    /* Main loop: keep spawning shell if it exits */
+    while (1) {
+        pid_t shell_pid = spawn_shell();
+        
+        if (shell_pid == -1) {
+            sleep(1);
+            continue;
+        }
+        
+        /* Wait for shell to exit */
+        int status;
+        while (waitpid(shell_pid, &status, 0) == -1) {
+            if (errno != EINTR) {
+                sleep(1);
+                break;
+            }
+        }
+        
+        /* Reap any other dead children */
+        if (child_exited) {
+            child_exited = 0;
+            reap_children();
+        }
+        
+        /* Give user a moment before respawning shell */
+        sleep(1);
+        printf("FusionOS: shell exited, restarting\n");
+    }
+    
+    return 0;
+}

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# FusionOS Build Script - Hardenedbootable ISO pipeline
+# FusionOS Build Script - Hardened bootable ISO pipeline
 # Kernel 6.6 LTS + custom compat layer init + BusyBox + GRUB2
 
 # Color output

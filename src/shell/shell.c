@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define MAX_CMD_LEN 4096
 #define MAX_ARGS 128
@@ -14,7 +15,6 @@
 /* Command history */
 static char history[HISTORY_SIZE][MAX_CMD_LEN];
 static int history_count = 0;
-static int history_idx = 0;
 
 /**
  * Print help message
@@ -186,7 +186,7 @@ static int parse_and_execute(const char *line) {
     
     /* Skip leading whitespace */
     while (*line && (*line == ' ' || *line == '\t')) line++;
-    if (!line || !*line) return 0;
+    if (!*line) return 0;
     
     /* Duplicate line for parsing */
     char cmd_line[MAX_CMD_LEN];

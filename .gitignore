@@ -1,0 +1,8 @@
+# FusionOS build artifacts
+build/
+
+# Editor and OS files
+*.swp
+*.swo
+*~
+.DS_Store

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define MAX_CMD_LEN 4096
 #define MAX_ARGS 128
@@ -14,7 +15,6 @@
 /* Command history */
 static char history[HISTORY_SIZE][MAX_CMD_LEN];
 static int history_count = 0;
-static int history_idx = 0;
 
 /**
  * Print help message
@@ -190,7 +190,7 @@ static int parse_and_execute(const char *line) {
     
     /* Duplicate line for parsing */
     char cmd_line[MAX_CMD_LEN];
-    strncpy(cmd_line, line, sizeof(cmd_line) - 1);
+    snprintf(cmd_line, sizeof(cmd_line), "%s", line);
     
     /* Split into arguments */
     char *args[MAX_ARGS];
@@ -324,7 +324,7 @@ int main(void) {
         
         /* Add to history */
         if (line[0] && history_count < HISTORY_SIZE) {
-            strncpy(history[history_count], line, MAX_CMD_LEN - 1);
+            snprintf(history[history_count], MAX_CMD_LEN, "%s", line);
             history_count++;
         }
         

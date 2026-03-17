@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <endian.h>
+#include <errno.h>
 
 /* ELF header constants */
 #define EI_NIDENT 16
@@ -28,7 +29,7 @@
 #define MACHO_64_REV 0xcffaedfe
 
 #define CPU_TYPE_I386    7
-#define CPU_TYPE_X86_64  7
+#define CPU_TYPE_X86_64  0x01000007
 #define CPU_TYPE_ARM    12
 #define CPU_TYPE_ARM64  0x0100000c
 
@@ -49,11 +50,10 @@ static int read_bytes(int fd, off_t offset, void *buf, size_t count) {
         if (ret == 0) return -1;  /* EOF before expected bytes */
         n += ret;
         ptr += ret;
-        remaining -= ret;
+        remaining -= (size_t)ret;
     }
     
-    if (errno == EINTR) return read_bytes(fd, offset, buf, count);
-    return n;
+    return (int)n;
 }
 
 /**
@@ -322,8 +322,8 @@ int detect_macho(const char *path, FusionBinInfo *out) {
     out->launcher_args[0] = "darling";
     out->launcher_args[1] = NULL;
     
-    /* Map CPU type */
-    switch (cputype & 0xFFFFFF) {  /* Mask off CPU_SUBTYPE bits */
+    /* Map CPU type — compare full value (high byte = CPU_ARCH_ABI64 flag) */
+    switch (cputype) {
         case CPU_TYPE_I386:
             out->arch = ARCH_X86;
             snprintf(out->description, sizeof(out->description),

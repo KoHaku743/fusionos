@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+
+# Editor temporaries
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Object files
+*.o
+*.a
+
+# Compiled binaries (tracked through artifacts)
+*.iso

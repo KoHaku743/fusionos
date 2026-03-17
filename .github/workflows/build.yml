@@ -1,0 +1,140 @@
+name: FusionOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  KERNEL_VERSION: "6.6.30"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Job 1: Compile all compat tools and run unit/integration tests
+  # ──────────────────────────────────────────────────────────────────
+  build-compat-tools:
+    name: Build & Test Compat Tools
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc \
+            binutils \
+            make \
+            gawk
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Compile all tools (zero-warning check)
+        run: |
+          set -e
+          CFLAGS="-O2 -Wall -Wextra -Wpedantic -std=c11"
+
+          gcc $CFLAGS -static \
+              src/init/init.c \
+              -o build/init
+
+          gcc $CFLAGS -static \
+              src/init/initramfs_init.c \
+              -o build/initramfs_init
+
+          gcc $CFLAGS -static \
+              src/compat/detect.c \
+              src/shell/shell.c \
+              -o build/fsh
+
+          gcc $CFLAGS -static \
+              src/compat/detect.c \
+              src/compat/fusion_run.c \
+              -o build/fusion-run
+
+          gcc $CFLAGS -static \
+              src/compat/detect.c \
+              src/compat/detect_test.c \
+              -o build/detect_test
+
+          gcc $CFLAGS -static \
+              src/pkg/fusion_pkg.c \
+              -o build/fusion-pkg
+
+          gcc $CFLAGS -static \
+              src/monitor/monitor.c \
+              -o build/fusion-monitor
+
+          echo "All binaries compiled successfully."
+
+      - name: Run integration tests
+        run: |
+          chmod +x tests/run_all.sh
+          bash tests/run_all.sh
+
+      - name: Upload compiled binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusionos-binaries
+          path: build/
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────────
+  # Job 2: Full ISO build — only on pushes to main
+  # ──────────────────────────────────────────────────────────────────
+  build-iso:
+    name: Build Bootable ISO
+    runs-on: ubuntu-22.04
+    needs: build-compat-tools
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc \
+            binutils \
+            make \
+            bc \
+            flex \
+            bison \
+            libelf-dev \
+            libssl-dev \
+            xz-utils \
+            cpio \
+            gzip \
+            grub-common \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            mtools \
+            xorriso \
+            wget \
+            ca-certificates
+
+      - name: Cache kernel source tarball
+        uses: actions/cache@v4
+        with:
+          path: build/linux-${{ env.KERNEL_VERSION }}.tar.xz
+          key: kernel-${{ env.KERNEL_VERSION }}
+
+      - name: Build FusionOS ISO
+        run: |
+          chmod +x build.sh
+          bash build.sh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusionos-iso
+          path: build/fusionos.iso
+          retention-days: 7

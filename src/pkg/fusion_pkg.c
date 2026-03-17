@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -210,7 +211,9 @@ static int cmd_install(const char *pkg_name) {
     switch (pkg->type) {
         case PKG_TYPE_APT:
             print_status("Updating package list", ANSI_BLUE);
-            system("apt-get update -qq");
+            if (system("apt-get update -qq") != 0) {
+                print_error("apt-get update failed");
+            }
             
             print_status("Installing APT packages", ANSI_BLUE);
             char cmd[512];
@@ -369,7 +372,10 @@ static int cmd_info(const char *pkg_name) {
  */
 static int cmd_update(void) {
     print_status("Updating package cache", ANSI_BLUE);
-    system("apt-get update -qq");
+    if (system("apt-get update -qq") != 0) {
+        print_error("apt-get update failed");
+        return 1;
+    }
     print_success("Cache updated");
     return 0;
 }

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <endian.h>
+#include <errno.h>
 
 /* ELF header constants */
 #define EI_NIDENT 16
@@ -28,7 +29,7 @@
 #define MACHO_64_REV 0xcffaedfe
 
 #define CPU_TYPE_I386    7
-#define CPU_TYPE_X86_64  7
+#define CPU_TYPE_X86_64  0x01000007
 #define CPU_TYPE_ARM    12
 #define CPU_TYPE_ARM64  0x0100000c
 
@@ -323,7 +324,7 @@ int detect_macho(const char *path, FusionBinInfo *out) {
     out->launcher_args[1] = NULL;
     
     /* Map CPU type */
-    switch (cputype & 0xFFFFFF) {  /* Mask off CPU_SUBTYPE bits */
+    switch (cputype) {
         case CPU_TYPE_I386:
             out->arch = ARCH_X86;
             snprintf(out->description, sizeof(out->description),

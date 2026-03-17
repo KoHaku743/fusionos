@@ -70,10 +70,17 @@ build_binaries() {
         -o "${SYSROOT}/sbin/init"
     strip --strip-all "${SYSROOT}/sbin/init"
     
-    # initramfs_init (first process)
-    gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
-        "${SCRIPT_DIR}/src/init/initramfs_init.c" \
-        -o "${BUILD_DIR}/initramfs_init"
+    # initramfs_init (first process, must stay under 100KB)
+    # Prefer musl-gcc for a tiny static binary; fall back to gcc
+    if command -v musl-gcc >/dev/null 2>&1; then
+        musl-gcc -Os -static \
+            "${SCRIPT_DIR}/src/init/initramfs_init.c" \
+            -o "${BUILD_DIR}/initramfs_init"
+    else
+        gcc -Os -static \
+            "${SCRIPT_DIR}/src/init/initramfs_init.c" \
+            -o "${BUILD_DIR}/initramfs_init"
+    fi
     strip --strip-all "${BUILD_DIR}/initramfs_init"
     
     # shell (fsh)

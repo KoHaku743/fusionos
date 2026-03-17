@@ -1,0 +1,162 @@
+name: FusionOS CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  KERNEL_VERSION: "6.6.13"
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1: Compile all compat tools and run unit/integration tests
+  # -----------------------------------------------------------------------
+  build-compat-tools:
+    name: Build Compat Tools & Run Tests
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc musl-tools libc6-dev make cpio gzip file
+
+      - name: Build all C binaries
+        run: |
+          mkdir -p build
+          # init (PID 1)
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/init/init.c -o build/init
+          # initramfs_init (use musl for tiny binary < 100KB)
+          musl-gcc -Os -static \
+              src/init/initramfs_init.c -o build/initramfs_init
+          # fsh (shell)
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/compat/detect.c src/shell/shell.c -o build/fsh
+          # fusion-run
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/compat/detect.c src/compat/fusion_run.c \
+              -o build/fusion-run
+          # fusion-pkg
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/pkg/fusion_pkg.c -o build/fusion-pkg
+          # fusion-monitor
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/monitor/monitor.c -o build/fusion-monitor
+          # detect_test
+          gcc -O2 -Wall -Wextra -Wpedantic -std=c11 -static \
+              src/compat/detect.c src/compat/detect_test.c \
+              -o build/detect_test
+          echo "All binaries compiled successfully"
+
+      - name: Strip binaries
+        run: |
+          strip --strip-all build/init build/initramfs_init \
+                            build/fsh build/fusion-run \
+                            build/fusion-pkg build/fusion-monitor \
+                            build/detect_test
+
+      - name: Verify initramfs_init is under 100KB
+        run: |
+          size=$(wc -c < build/initramfs_init)
+          echo "initramfs_init size: ${size} bytes"
+          if [ "$size" -ge 102400 ]; then
+            echo "ERROR: initramfs_init is ${size} bytes (>= 100KB limit)"
+            exit 1
+          fi
+
+      - name: Verify binary formats
+        run: |
+          file build/init
+          file build/fsh
+          file build/fusion-run
+          file build/fusion-pkg
+          file build/fusion-monitor
+
+      - name: Run detect integration tests
+        run: |
+          chmod +x tests/test_detect.sh
+          bash tests/test_detect.sh
+
+      - name: Run shell integration tests
+        run: |
+          chmod +x tests/test_shell.sh
+          bash tests/test_shell.sh
+
+      - name: Upload compiled binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusionos-binaries
+          path: |
+            build/init
+            build/initramfs_init
+            build/fsh
+            build/fusion-run
+            build/fusion-pkg
+            build/fusion-monitor
+            build/detect_test
+          retention-days: 7
+
+  # -----------------------------------------------------------------------
+  # Job 2: Full ISO build — only on pushes to main
+  # -----------------------------------------------------------------------
+  build-iso:
+    name: Build Bootable ISO
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-compat-tools
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc make cpio gzip xz-utils \
+            grub-pc-bin grub-efi-amd64-bin xorriso mtools \
+            squashfs-tools wget bc flex bison libssl-dev \
+            libelf-dev libncurses-dev
+
+      - name: Cache kernel source
+        uses: actions/cache@v4
+        id: kernel-cache
+        with:
+          path: build/linux-${{ env.KERNEL_VERSION }}.tar.xz
+          key: kernel-${{ env.KERNEL_VERSION }}
+
+      - name: Download kernel source (if not cached)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p build
+          wget -q --show-progress \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${{ env.KERNEL_VERSION }}.tar.xz" \
+            -O "build/linux-${{ env.KERNEL_VERSION }}.tar.xz"
+
+      - name: Build full ISO
+        run: |
+          bash build.sh
+        timeout-minutes: 90
+
+      - name: Show ISO info
+        run: |
+          ls -lh build/fusionos.iso
+          file build/fusionos.iso
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusionos-iso
+          path: build/fusionos.iso
+          retention-days: 7

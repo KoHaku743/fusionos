@@ -1,0 +1,13 @@
+# Build artefacts
+/build/
+*.iso
+*.img
+
+# Compiled binaries in src/ (if ever built in-tree)
+*.o
+*.a
+
+# Editor temp files
+*.swp
+*~
+.DS_Store

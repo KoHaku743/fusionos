@@ -240,9 +240,9 @@ int detect_macho(const char *path, FusionBinInfo *out)
     int is_le  = 0;
     int is_fat = 0;
 
-    if      (magic_le == MACHO_MH_CIGAM)    { is_64 = 0; is_le = 1; }
+    if      (magic_le == MACHO_MH_MAGIC)    { is_64 = 0; is_le = 1; }
     else if (magic_be == MACHO_MH_MAGIC)    { is_64 = 0; is_le = 0; }
-    else if (magic_le == MACHO_MH_CIGAM_64) { is_64 = 1; is_le = 1; }
+    else if (magic_le == MACHO_MH_MAGIC_64) { is_64 = 1; is_le = 1; }
     else if (magic_be == MACHO_MH_MAGIC_64) { is_64 = 1; is_le = 0; }
     else if (magic_be == MACHO_FAT_MAGIC ||
              magic_le == MACHO_FAT_CIGAM)   { is_fat = 1; }

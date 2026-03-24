@@ -1,0 +1,8 @@
+# Build output
+out/
+
+# Editor temporaries
+*.swp
+*.swo
+*~
+.DS_Store

@@ -1,0 +1,34 @@
+; FusionOS CONFIG.SYS
+; Processed by COMMAND.COM at startup, before AUTOEXEC.BAT.
+; Equivalent to the classic MS-DOS CONFIG.SYS.
+;
+; Syntax: KEY=VALUE   (comments begin with ';')
+
+; ── File / buffer limits ──────────────────────────────────────────────
+FILES=64
+BUFFERS=32
+STACKS=9,256
+
+; ── Shell path ────────────────────────────────────────────────────────
+; Specifies the command interpreter.  Recognised by hosted FusionOS init.
+SHELL=C:\COMMAND.COM /P
+
+; ── Break (Ctrl+C behaviour) ──────────────────────────────────────────
+BREAK=ON
+
+; ── Country / codepage ────────────────────────────────────────────────
+; COUNTRY=001,437      ; US English, codepage 437
+
+; ── Initial environment variables ─────────────────────────────────────
+SET COMSPEC=C:\COMMAND.COM
+SET DIRCMD=/P /OGN
+
+; ── DOS compatibility mode ────────────────────────────────────────────
+; Set DOS=HIGH to load DOS into the HMA (informational in FusionOS).
+DOS=HIGH
+
+; ── Device drivers ────────────────────────────────────────────────────
+; Uncomment to activate optional drivers once they exist.
+; DEVICE=C:\DOS\HIMEM.SYS
+; DEVICE=C:\DOS\EMM386.EXE NOEMS
+; DEVICE=C:\DOS\ANSI.SYS

@@ -12,10 +12,16 @@
 
 /**
  * FusionOS init (PID 1)
- * - Mounts proc/sys/dev/tmp
- * - Sets environment
- * - Spawns shell in loop
- * - Handles reaping of orphans
+ *
+ * DOS-first design: after mounting essential filesystems, this init
+ * spawns COMMAND.COM (fsh) — the same way classic DOS boots directly
+ * into COMMAND.COM after IO.SYS and MSDOS.SYS have finished.
+ *
+ * Responsibilities:
+ *   - Mount proc/sys/dev/tmp
+ *   - Set DOS-style environment variables
+ *   - Spawn COMMAND.COM in a loop (respawn on exit, like a DOS warm-boot)
+ *   - Reap orphaned child processes
  */
 
 /* Signal handler for SIGCHLD - reap children */
@@ -40,44 +46,50 @@ static int mount_fs(const char *source, const char *target, const char *type,
 }
 
 /**
- * Initialize the filesystem mounts and environment
+ * Initialize the filesystem mounts and DOS-style environment
  */
 static int init_system(void) {
     printf("FusionOS init (PID 1) starting...\n");
-    
-    /* Ensure /proc is mounted */
+
     struct stat sb;
+    /* Ensure /proc is mounted */
     if (stat("/proc/version", &sb) != 0) {
         printf("Mounting /proc...\n");
         mount_fs("proc", "/proc", "proc", 0, NULL);
     }
-    
+
     /* Ensure /sys is mounted */
     if (stat("/sys/class", &sb) != 0) {
         printf("Mounting /sys...\n");
         mount_fs("sysfs", "/sys", "sysfs", 0, NULL);
     }
-    
+
     /* Ensure /dev is mounted */
     if (stat("/dev/null", &sb) != 0) {
         printf("Mounting /dev...\n");
         mount_fs("devtmpfs", "/dev", "devtmpfs", MS_NOSUID, "mode=0755");
     }
-    
-    /* Ensure /tmp is mounted */
+
+    /* Ensure /tmp (C:\TEMP equivalent) is mounted */
     if (stat("/tmp", &sb) != 0) {
         mkdir("/tmp", 0777);
     }
     mount_fs("tmpfs", "/tmp", "tmpfs", 0, "mode=1777");
-    
+
     printf("System mounts initialized\n");
-    
-    /* Set basic environment */
-    setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin", 1);
-    setenv("HOME", "/root", 1);
-    setenv("TERM", "linux", 1);
-    setenv("PS1", "fsh> ", 1);
-    
+
+    /*
+     * DOS-style environment: COMMAND.COM++ (fsh) reads these on startup.
+     * PATH uses DOS-style semicolon separators (fsh translates at lookup).
+     */
+    setenv("PATH",    "/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin", 1);
+    setenv("HOME",    "/root", 1);
+    setenv("TERM",    "linux", 1);
+    setenv("COMSPEC", "C:\\COMMAND.COM", 1);
+    setenv("OS",      "FusionOS", 1);
+    setenv("TEMP",    "C:\\TEMP", 1);
+    setenv("TMP",     "C:\\TEMP", 1);
+
     return 0;
 }
 
@@ -113,11 +125,12 @@ static pid_t spawn_shell(void) {
         close(fd_out);
         close(fd_err);
         
-        /* Execute fsh (FusionOS shell) */
-        execl("/bin/fsh", "fsh", NULL);
-        
-        /* Fallback to sh if fsh not available */
-        printf("fsh not found, trying busybox sh\n");
+        /* Execute COMMAND.COM (fsh — the FusionOS DOS shell) */
+        execl("/bin/fsh", "COMMAND.COM", NULL);
+        execl("/usr/bin/fsh", "COMMAND.COM", NULL);
+
+        /* Fallback to BusyBox ash if fsh is not yet installed */
+        printf("COMMAND.COM (fsh) not found, trying busybox sh\n");
         execl("/bin/sh", "sh", NULL);
         
         /* Ultimate fallback */
@@ -165,8 +178,8 @@ int main(void) {
     signal(SIGTERM, SIG_IGN);
     signal(SIGINT, SIG_IGN);
     
-    printf("FusionOS init ready. Spawning shell...\n");
-    printf("=== FusionOS Console ===\n");
+    printf("FusionOS init ready. Starting COMMAND.COM...\n");
+    printf("=== FusionOS — MS-DOS Evolved ===\n");
     
     /* Main loop: keep spawning shell if it exits */
     while (1) {
@@ -191,10 +204,10 @@ int main(void) {
             child_exited = 0;
             reap_children();
         }
-        
-        /* Give user a moment before respawning shell */
+
+        /* Warm-boot: respawn COMMAND.COM after a brief pause */
         sleep(1);
-        printf("FusionOS: shell exited, restarting\n");
+        printf("FusionOS: COMMAND.COM exited, warm-booting...\n");
     }
     
     return 0;

@@ -397,10 +397,13 @@ static int cmd_info(const char *name) {
 static int cmd_update(void) {
     printf("%s==>%s Updating package database...\n", CLR_CYAN, CLR_RESET);
 
+    /* Index of dnf in managers[] — used to detect its special exit code. */
+    enum { MGR_APT = 0, MGR_PACMAN = 1, MGR_DNF = 2 };
+
     const char *managers[][3] = {
-        { "apt-get", "update", NULL },
-        { "pacman",  "-Sy",    NULL },
-        { "dnf",     "check-update", NULL },
+        [MGR_APT]    = { "apt-get", "update",       NULL },
+        [MGR_PACMAN] = { "pacman",  "-Sy",           NULL },
+        [MGR_DNF]    = { "dnf",     "check-update",  NULL },
         { NULL, NULL, NULL },
     };
 
@@ -414,7 +417,9 @@ static int cmd_update(void) {
         argv[j] = NULL;
 
         int rc = run_cmd(argv);
-        if (rc == 0 || (i == 2 && rc == 100)) {   /* dnf check-update returns 100 when updates exist */
+        if (rc == 0 ||
+            /* dnf check-update exits 100 when updates exist — treat as success */
+            (i == MGR_DNF && rc == 100)) {
             printf("%s==>%s Database updated.\n", CLR_GREEN, CLR_RESET);
             return 0;
         }

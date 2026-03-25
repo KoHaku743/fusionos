@@ -65,11 +65,16 @@ with the DOS environment below it.
 - [ ] `CHKDSK C:` command — FAT consistency check
 
 ### Package Manager (`fusion-pkg`)
-- [ ] Define `.fpkg` package format:
+- [x] Define `.fpkg` package format:
   - Header: name, version, arch, checksum (SHA-256)
-  - Compressed payload (zstd): files installed to `C:\DOS`, `C:\BIN`, `C:\GAMES`
-  - Install/uninstall scripts (`.BAT` format)
-- [ ] Native backend (no delegation to apt/pacman)
+  - File entry table: DOS destination path, payload offset, mode
+  - Pre/post-install scripts (`.BAT` format)
+  - SHA-256 trailer covering all preceding bytes
+- [x] Native backend (no delegation to apt/pacman):
+  - `fusion-pkg pack <manifest> <files_dir> <out.fpkg>` — create packages
+  - `fusion-pkg verify <file.fpkg>` — check magic + SHA-256
+  - `fusion-pkg install <file.fpkg>` — extract, run scripts, update DB
+  - Legacy fallback: `fusion-pkg install <name>` still delegates to system pkg mgr
 - [ ] Package signing with Ed25519
 - [ ] Initial FusionOS package repository with core tools
 - [ ] `fusion-pkg upgrade` — upgrade installed packages

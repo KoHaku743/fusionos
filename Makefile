@@ -71,6 +71,19 @@ test: all
 	$(STAGING)/bin/fusion-net STATUS | grep -q "Network"
 	@echo "=== Running fat-chkdsk help test ==="
 	$(STAGING)/bin/fat-chkdsk 2>&1 | grep -q "Usage"
+	@echo "=== Running fusion-pkg .fpkg tests ==="
+	$(STAGING)/bin/fusion-pkg help | grep -q "verify"
+	$(STAGING)/bin/fusion-pkg help | grep -q "pack"
+	$(STAGING)/bin/fusion-pkg help | grep -q "fpkg"
+	@echo "-- Creating test .fpkg package --"
+	@mkdir -p /tmp/fpkg-test/bin
+	@echo -e '#!/bin/sh\necho hello-from-fpkg' > /tmp/fpkg-test/bin/hello-fpkg
+	@chmod 0755 /tmp/fpkg-test/bin/hello-fpkg
+	@printf 'Name=hello-fpkg\nVersion=0.1.0\nArch=any\nDescription=FusionOS fpkg test package\n' \
+		> /tmp/fpkg-test-manifest.txt
+	$(STAGING)/bin/fusion-pkg pack /tmp/fpkg-test-manifest.txt /tmp/fpkg-test /tmp/hello-fpkg.fpkg
+	@echo "-- Verifying test .fpkg package --"
+	$(STAGING)/bin/fusion-pkg verify /tmp/hello-fpkg.fpkg | grep -q "OK"
 	@echo "All tests passed."
 
 clean:

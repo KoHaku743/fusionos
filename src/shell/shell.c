@@ -780,7 +780,7 @@ static void cmd_help(const char *topic) {
         printf("\n  Filesystem:\n");
         printf("  CHKDSK [device] [part]    Check FAT filesystem integrity\n");
         printf("\n  Modern extensions:\n");
-        printf("  INSTALL <pkg>             Install a package (fusion-pkg)\n");
+        printf("  INSTALL <pkg|file.fpkg>   Install package or .fpkg file\n");
         printf("  COMPAT  <file>            Detect binary format\n");
         printf("  RUN     <prog> [args]     Run with auto compat-layer\n");
         printf("  LAYERS                    Show active compat layers\n");

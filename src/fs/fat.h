@@ -161,6 +161,11 @@ typedef struct {
 
     /* Volume label */
     char      volume_label[12]; /* NUL-terminated */
+
+    /* FSInfo (FAT32 only) */
+    uint16_t  fs_info_sector;     /* Sector number of FSInfo struct; 0 = none */
+    uint32_t  free_cluster_count; /* Cached free cluster count; 0xFFFFFFFF = unknown */
+    uint32_t  next_free_cluster;  /* Allocation hint; 0xFFFFFFFF = unknown */
 } FatVolume;
 
 /* ── File handle ─────────────────────────────────────────────────────── */
@@ -170,11 +175,17 @@ typedef struct {
     uint32_t   file_size;        /* 0 for directories */
     int        is_dir;
 
-    /* Current read position */
+    /* Current read/write position */
     uint32_t   pos;              /* Byte offset from start */
     uint32_t   cur_cluster;      /* Cluster currently buffered */
     uint32_t   cur_cluster_idx;  /* Which cluster in the chain (0-based) */
     uint8_t   *cluster_buf;      /* Allocated cluster-sized buffer */
+
+    /* Write support */
+    uint32_t   dirent_lba;       /* LBA of sector holding this file's dir entry */
+    uint32_t   dirent_off;       /* Byte offset within dirent_lba (0 = unknown) */
+    uint32_t   last_cluster;     /* Last cluster in chain; 0 = not yet resolved */
+    int        buf_dirty;        /* 1 = cluster_buf modified and needs flush */
 } FatFile;
 
 /* ── Directory iterator ───────────────────────────────────────────────── */
@@ -271,6 +282,24 @@ ssize_t fat_write(FatFile *file, const void *buf, size_t len);
  * @return 0 on success, -1 on error.
  */
 int fat_unlink(FatVolume *vol, const char *path);
+
+/**
+ * Flush any dirty write buffer and update the on-disk directory entry
+ * file_size field.  Must be called after fat_write to persist changes.
+ *
+ * @return 0 on success, -1 on error.
+ */
+int fat_flush(FatFile *file);
+
+/**
+ * Count free clusters and validate the FSInfo free-cluster count.
+ *
+ * @param[out] free_count   Number of free clusters found by FAT scan.
+ * @param[out] fsinfo_count FSInfo free_count field (0xFFFFFFFF if N/A).
+ * @return 0 on success, -1 on error.
+ */
+int fat_check_free_count(FatVolume *vol, uint32_t *free_count,
+                         uint32_t *fsinfo_count);
 
 /**
  * Return a human-readable filesystem type string.

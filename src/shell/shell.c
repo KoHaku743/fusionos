@@ -9,9 +9,12 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <dirent.h>
+#include <signal.h>
+#include <sched.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include "../compat/detect.h"
 
 /*
@@ -45,6 +48,153 @@ typedef struct {
 } Alias;
 
 #define MAX_ALIASES 64
+
+/* ── Job control ─────────────────────────────────────────────────────── */
+
+/**
+ * Priority levels for launched processes.
+ * REALTIME maps to SCHED_FIFO (requires root / CAP_SYS_NICE).
+ * HIGH and NORMAL use setpriority nice-value adjustments.
+ */
+typedef enum {
+    PRIO_NORMAL   = 0,
+    PRIO_HIGH     = 1,
+    PRIO_REALTIME = 2,
+} ExecPriority;
+
+#define MAX_JOBS 32
+
+typedef struct {
+    int          active;
+    pid_t        pid;
+    char         name[64];    /* command name */
+    ExecPriority priority;
+    int          stopped;     /* 1 if sent SIGSTOP */
+} Job;
+
+static Job jobs[MAX_JOBS];
+
+/** Add a background job to the table.  Returns job index (1-based) or -1. */
+static int jobs_add(pid_t pid, const char *name, ExecPriority prio) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!jobs[i].active) {
+            jobs[i].active   = 1;
+            jobs[i].pid      = pid;
+            jobs[i].priority = prio;
+            jobs[i].stopped  = 0;
+            size_t nlen = strlen(name);
+            if (nlen >= sizeof(jobs[i].name)) nlen = sizeof(jobs[i].name) - 1;
+            memcpy(jobs[i].name, name, nlen);
+            jobs[i].name[nlen] = '\0';
+            return i + 1;  /* 1-based job number */
+        }
+    }
+    return -1;  /* table full */
+}
+
+/** Reap any finished background jobs (non-blocking). */
+static void reap_jobs(void) {
+    int    status;
+    pid_t  pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (jobs[i].active && jobs[i].pid == pid) {
+                int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+                printf("\n[%d]  Done (%d): %s\n",
+                       i + 1, code, jobs[i].name);
+                jobs[i].active = 0;
+                break;
+            }
+        }
+    }
+}
+
+/** JOBS command — list active background jobs. */
+static void cmd_jobs(void) {
+    int any = 0;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!jobs[i].active) continue;
+        const char *prio_str =
+            jobs[i].priority == PRIO_REALTIME ? "REALTIME" :
+            jobs[i].priority == PRIO_HIGH     ? "HIGH"     : "NORMAL";
+        const char *state = jobs[i].stopped ? "Stopped" : "Running";
+        printf("[%d]  %s  PID %-8d  %-8s  %s\n",
+               i + 1, state, jobs[i].pid, prio_str, jobs[i].name);
+        any = 1;
+    }
+    if (!any) printf("No background jobs.\n");
+}
+
+/** Parse a job specifier: %N → index N (1-based), numeric → PID. */
+static pid_t resolve_job_spec(const char *spec) {
+    if (spec[0] == '%') {
+        int idx = atoi(spec + 1) - 1;
+        if (idx >= 0 && idx < MAX_JOBS && jobs[idx].active)
+            return jobs[idx].pid;
+        return -1;
+    }
+    return (pid_t)atoi(spec);
+}
+
+/** KILL command. */
+static void cmd_kill_job(const char *spec, int sig) {
+    if (!spec || !*spec) {
+        fprintf(stderr, "KILL: missing PID or %%job\n");
+        return;
+    }
+    pid_t pid = resolve_job_spec(spec);
+    if (pid <= 0) {
+        fprintf(stderr, "KILL: invalid job spec: %s\n", spec);
+        return;
+    }
+    if (kill(pid, sig) != 0)
+        perror("kill");
+    else {
+        if (sig == SIGTERM || sig == SIGKILL) {
+            /* Mark job inactive */
+            for (int i = 0; i < MAX_JOBS; i++) {
+                if (jobs[i].active && jobs[i].pid == pid) {
+                    jobs[i].active = 0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/** PAUSE command (suspend a background job). */
+static void cmd_pause_job(const char *spec) {
+    /* No argument: interactive "press any key" pause */
+    if (!spec || !*spec) {
+        printf("Press any key to continue . . . ");
+        fflush(stdout);
+        getchar();
+        putchar('\n');
+        return;
+    }
+    pid_t pid = resolve_job_spec(spec);
+    if (pid <= 0) {
+        fprintf(stderr, "PAUSE: invalid job spec: %s\n", spec);
+        return;
+    }
+    if (kill(pid, SIGSTOP) != 0) { perror("kill"); return; }
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].active && jobs[i].pid == pid) { jobs[i].stopped = 1; break; }
+    }
+    printf("[Stopped] PID %d\n", pid);
+}
+
+/** RESUME command (continue a stopped background job). */
+static void cmd_resume_job(const char *spec) {
+    if (!spec || !*spec) { fprintf(stderr, "RESUME: missing job spec\n"); return; }
+    pid_t pid = resolve_job_spec(spec);
+    if (pid <= 0) { fprintf(stderr, "RESUME: invalid job spec: %s\n", spec); return; }
+    if (kill(pid, SIGCONT) != 0) { perror("kill"); return; }
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].active && jobs[i].pid == pid) { jobs[i].stopped = 0; break; }
+    }
+    printf("[Continued] PID %d\n", pid);
+}
 
 /* ── Globals ────────────────────────────────────────────────────────── */
 static char  history[HISTORY_SIZE][MAX_CMD_LEN];
@@ -608,13 +758,27 @@ static void cmd_help(const char *topic) {
         printf("  DATE                      Show current date\n");
         printf("  TIME                      Show current time\n");
         printf("  VER                       Show OS version\n");
-        printf("  PAUSE                     Wait for a keypress\n");
         printf("  GOTO   <label>            Jump to a label in a batch file\n");
         printf("  CALL   <batch> [args]     Call a batch file\n");
         printf("  IF     [NOT] condition    Conditional execution\n");
         printf("  FOR    %%V IN (set) DO cmd Loop over a set\n");
         printf("  REM    [comment]          Remark (ignored)\n");
         printf("  EXIT                      Exit COMMAND.COM\n");
+        printf("\n  Multitasking:\n");
+        printf("  <cmd> &                   Run command in background\n");
+        printf("  JOBS                      List background jobs\n");
+        printf("  KILL   [sig] <pid|%%job>  Send signal to a job (default SIGTERM)\n");
+        printf("  PAUSE  [%%job|pid]        Suspend job (no arg: wait for keypress)\n");
+        printf("  RESUME <%%job|pid>        Resume a suspended job\n");
+        printf("  REALTIME <cmd>            Run command at REALTIME priority\n");
+        printf("  HIGH     <cmd>            Run command at HIGH priority\n");
+        printf("  NORMAL   <cmd>            Run command at NORMAL priority\n");
+        printf("\n  Networking:\n");
+        printf("  NET STATUS                List network interfaces\n");
+        printf("  NET PING   <host>         Test reachability\n");
+        printf("  NET CONNECT <host> <port> Test TCP connection\n");
+        printf("\n  Filesystem:\n");
+        printf("  CHKDSK [device] [part]    Check FAT filesystem integrity\n");
         printf("\n  Modern extensions:\n");
         printf("  INSTALL <pkg>             Install a package (fusion-pkg)\n");
         printf("  COMPAT  <file>            Detect binary format\n");
@@ -630,7 +794,7 @@ static void cmd_help(const char *topic) {
 
 /* ── External command executor ───────────────────────────────────────── */
 
-static int run_external(char **args, int argc) {
+static int run_external(char **args, int argc, int bg, ExecPriority prio) {
     if (!args || !args[0]) return 1;
     (void)argc;
 
@@ -651,6 +815,21 @@ static int run_external(char **args, int argc) {
     if (pid < 0) { perror("fork"); return 127; }
 
     if (pid == 0) {
+        /* ── Child: apply priority, then exec ── */
+        if (prio == PRIO_REALTIME) {
+            struct sched_param sp;
+            sp.sched_priority = sched_get_priority_max(SCHED_FIFO);
+            if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+                /* Fallback: requires CAP_SYS_NICE */
+                if (setpriority(PRIO_PROCESS, 0, -20) != 0)
+                    fprintf(stderr,
+                        "Warning: REALTIME priority requires CAP_SYS_NICE; "
+                        "running at normal priority.\n");
+            }
+        } else if (prio == PRIO_HIGH) {
+            setpriority(PRIO_PROCESS, 0, -10);
+        }
+
         if (needs_launcher && info.launcher) {
             char *largs[MAX_ARGS];
             int li = 0;
@@ -669,6 +848,14 @@ static int run_external(char **args, int argc) {
         _exit(1);
     }
 
+    if (bg) {
+        /* Background: register in job table and return immediately */
+        int jid = jobs_add(pid, args[0], prio);
+        if (jid > 0) printf("[%d] %d\n", jid, pid);
+        return 0;
+    }
+
+    /* Foreground: wait for child */
     int status = 0;
     while (waitpid(pid, &status, 0) == -1) {
         if (errno != EINTR) break;
@@ -810,7 +997,34 @@ static int eval_if_condition(char **argv, int *pos, int argc) {
 static int dispatch(char **argv, int argc, int batch_depth) {
     if (argc == 0 || !argv[0]) return 0;
 
+    /* ── Detect background operator (&) ────────────────────────────── */
+    int bg = 0;
+    if (argc > 1 && strcmp(argv[argc - 1], "&") == 0) {
+        bg = 1;
+        argc--;
+        argv[argc] = NULL;
+        if (argc == 0) return 0;
+    }
+
+    /* ── Detect priority prefix ─────────────────────────────────────── */
+    ExecPriority prio = PRIO_NORMAL;
     const char *cmd = argv[0];
+    if (strcasecmp(cmd, "REALTIME") == 0) {
+        prio = PRIO_REALTIME;
+        argv++; argc--;
+        if (argc == 0) { fprintf(stderr, "REALTIME: missing command\n"); return 1; }
+        cmd = argv[0];
+    } else if (strcasecmp(cmd, "HIGH") == 0) {
+        prio = PRIO_HIGH;
+        argv++; argc--;
+        if (argc == 0) { fprintf(stderr, "HIGH: missing command\n"); return 1; }
+        cmd = argv[0];
+    } else if (strcasecmp(cmd, "NORMAL") == 0) {
+        prio = PRIO_NORMAL;
+        argv++; argc--;
+        if (argc == 0) { fprintf(stderr, "NORMAL: missing command\n"); return 1; }
+        cmd = argv[0];
+    }
 
     /* ── Internal commands ─────────────────────────────── */
 
@@ -837,14 +1051,6 @@ static int dispatch(char **argv, int argc, int batch_depth) {
     if (strcasecmp(cmd, "VER") == 0)   { cmd_ver(); return 0; }
     if (strcasecmp(cmd, "DATE") == 0)  { cmd_date(); return 0; }
     if (strcasecmp(cmd, "TIME") == 0)  { cmd_time_show(); return 0; }
-
-    if (strcasecmp(cmd, "PAUSE") == 0) {
-        printf("Press any key to continue . . . ");
-        fflush(stdout);
-        getchar();
-        putchar('\n');
-        return 0;
-    }
 
     if (strcasecmp(cmd, "EXIT") == 0) exit(0);
 
@@ -991,18 +1197,62 @@ static int dispatch(char **argv, int argc, int batch_depth) {
 
     if (strcasecmp(cmd, "INSTALL") == 0) {
         argv[0] = "fusion-pkg";
-        return run_external(argv, argc);
+        return run_external(argv, argc, bg, prio);
     }
 
     if (strcasecmp(cmd, "RUN") == 0) {
         if (argc < 2) { fprintf(stderr, "RUN: missing program\n"); return 1; }
-        return run_external(argv + 1, argc - 1);
+        return run_external(argv + 1, argc - 1, bg, prio);
     }
 
     if (strcasecmp(cmd, "SYSINFO") == 0) {
         argv[0] = "fusion-monitor";
         argv[1] = NULL;
-        return run_external(argv, 1);
+        return run_external(argv, 1, 0, PRIO_NORMAL);
+    }
+
+    /* ── Job control ─────────────────────────────────────────────────── */
+
+    if (strcasecmp(cmd, "JOBS") == 0) { cmd_jobs(); return 0; }
+
+    if (strcasecmp(cmd, "KILL") == 0) {
+        /* KILL [signal] <pid|%job>  — default signal: SIGTERM */
+        int sig = SIGTERM;
+        const char *spec = NULL;
+        if (argc == 2) {
+            spec = argv[1];
+        } else if (argc == 3) {
+            sig = atoi(argv[1]);
+            spec = argv[2];
+        }
+        cmd_kill_job(spec, sig > 0 ? sig : SIGTERM);
+        return 0;
+    }
+
+    if (strcasecmp(cmd, "PAUSE") == 0) {
+        /* PAUSE [%job|pid] — with no job arg: interactive "press any key" */
+        cmd_pause_job(argc > 1 ? argv[1] : NULL);
+        return 0;
+    }
+
+    if (strcasecmp(cmd, "RESUME") == 0) {
+        cmd_resume_job(argc > 1 ? argv[1] : NULL);
+        return 0;
+    }
+
+    /* ── Networking ──────────────────────────────────────────────────── */
+
+    if (strcasecmp(cmd, "NET") == 0) {
+        /* Pass all args through to fusion-net: NET STATUS → fusion-net STATUS */
+        argv[0] = "fusion-net";
+        return run_external(argv, argc, 0, PRIO_NORMAL);
+    }
+
+    /* ── FAT integrity ───────────────────────────────────────────────── */
+
+    if (strcasecmp(cmd, "CHKDSK") == 0) {
+        argv[0] = "fat-chkdsk";
+        return run_external(argv, argc, 0, PRIO_NORMAL);
     }
 
     /* Check if alias matches */
@@ -1024,7 +1274,7 @@ static int dispatch(char **argv, int argc, int batch_depth) {
     }
 
     /* External command / program */
-    return run_external(argv, argc);
+    return run_external(argv, argc, bg, prio);
 }
 
 /* ── Batch (.BAT) executor ───────────────────────────────────────────── */
@@ -1219,7 +1469,10 @@ int main(int argc, char *argv[]) {
 
     char line[MAX_CMD_LEN];
     while (1) {
-        if (interactive) print_prompt();
+        if (interactive) {
+            reap_jobs();   /* non-blocking: notify finished background jobs */
+            print_prompt();
+        }
 
         if (read_line(line, sizeof(line)) != 0) break;
 

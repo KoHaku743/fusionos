@@ -13,6 +13,8 @@ all: \
 	$(STAGING)/bin/fusion-pkg \
 	$(STAGING)/bin/fusion-monitor \
 	$(STAGING)/bin/fat-info \
+	$(STAGING)/bin/fat-chkdsk \
+	$(STAGING)/bin/fusion-net \
 	$(STAGING)/bin/init \
 	$(STAGING)/bin/initramfs-init
 
@@ -43,20 +45,32 @@ $(STAGING)/bin/fusion-monitor: src/monitor/monitor.c | $(STAGING)/bin
 $(STAGING)/bin/fat-info: src/fs/fat_info.c $(STAGING)/fat.o | $(STAGING)/bin
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(STAGING)/bin/fat-chkdsk: src/fs/fat_chkdsk.c $(STAGING)/fat.o | $(STAGING)/bin
+	$(CC) $(CFLAGS) $^ -o $@
+
+$(STAGING)/bin/fusion-net: src/net/net.c | $(STAGING)/bin
+	$(CC) $(CFLAGS) $< -o $@
+
 $(STAGING)/bin/init: src/init/init.c | $(STAGING)/bin
 	$(CC) $(CFLAGS) $< -o $@
 
 $(STAGING)/bin/initramfs-init: src/init/initramfs_init.c | $(STAGING)/bin
 	$(CC) $(CFLAGS) $< -o $@
 
-test: $(STAGING)/bin/detect-test $(STAGING)/bin/fsh
+test: all
 	@echo "=== Running binary detection tests ==="
 	$(STAGING)/bin/detect-test $(STAGING)/bin/fsh
 	$(STAGING)/bin/detect-test $(STAGING)/bin/fusion-pkg
 	$(STAGING)/bin/detect-test $(STAGING)/bin/fusion-run
-	@echo "=== Running shell smoke test ==="
+	@echo "=== Running shell smoke tests ==="
 	@echo "VER" | $(STAGING)/bin/fsh
 	@echo "HELP" | $(STAGING)/bin/fsh | grep -q "DIR"
+	@echo "JOBS" | $(STAGING)/bin/fsh | grep -q "No background"
+	@echo "NET" | $(STAGING)/bin/fsh ; true
+	@echo "=== Running NET STATUS test ==="
+	$(STAGING)/bin/fusion-net STATUS | grep -q "Network"
+	@echo "=== Running fat-chkdsk help test ==="
+	$(STAGING)/bin/fat-chkdsk 2>&1 | grep -q "Usage"
 	@echo "All tests passed."
 
 clean:
